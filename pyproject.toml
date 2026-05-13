@@ -1,0 +1,12 @@
+[project]
+name = "epub-tts"
+version = "1.1"
+description = "Convert EPUB books to MP3 files with a chosen TTS voice."
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "edge-tts>=7.0.0",
+    "tkinterdnd2>=0.4.3",
+]
+
+[tool.uv]
+package = false
