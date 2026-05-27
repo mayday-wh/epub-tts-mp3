@@ -59,6 +59,14 @@ run_ui.bat
 uv run --managed-python epub_tts_ui.py
 ```
 
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/18651436-6f1f-4f0d-89dd-f8db3511db0b" width="70%" alt="界面截图" />
+</p>
+
+<p align="center">
+  <sub>EPUB转MP3助手 v1.2 界面截图</sub>
+</p>
+
 界面支持：
 
 - 拖入或选择 EPUB 文件
