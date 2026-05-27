@@ -27,7 +27,12 @@ from epub_tts import (
 )
 
 
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
+PAGE_SIZES = {
+    "small": (900, 600),
+    "medium": (1000, 680),
+    "large": (1200, 800),
+}
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -134,7 +139,7 @@ class RoundedButton(tk.Canvas):
     def _draw(self, fill: str, fg: str) -> None:
         self.delete("all")
         draw_rounded_rect(self, 1, 1, self.width_px - 1, self.height_px - 1, self.radius, fill=fill, outline="")
-        self.create_text(self.width_px // 2, self.height_px // 2, text=self.text, fill=fg, font=("Microsoft YaHei UI", 10, "bold"))
+        self.create_text(self.width_px // 2, self.height_px // 2, text=self.text, fill=fg, font=("Microsoft YaHei UI", 9, "bold"))
 
     def _on_enter(self, event: tk.Event) -> None:
         if self.state != "disabled":
@@ -178,7 +183,7 @@ class TinyStepper(tk.Canvas):
         height = max(self.winfo_height(), self.height_px)
         mid = height // 2
         self.delete("all")
-        self.create_rectangle(0, 0, width - 1, height - 1, fill="#ffffff", outline=self.border)
+        self.create_rectangle(0, 0, width - 1, height - 1, fill="#fbfdff", outline=self.border)
         self.create_line(0, mid, width, mid, fill=self.border)
         self.create_text(width // 2, mid // 2, text="▲", fill=self.fg, font=("Microsoft YaHei UI", 7, "bold"))
         self.create_text(width // 2, mid + (height - mid) // 2, text="▼", fill=self.fg, font=("Microsoft YaHei UI", 7, "bold"))
@@ -222,13 +227,36 @@ def configure_tk_scaling(root: tk.Tk) -> float:
     return scale
 
 
+def detect_layout_scale(root: tk.Tk) -> float:
+    try:
+        dpi_scale = float(root.tk.call("tk", "scaling")) / (96 / 72)
+    except Exception:
+        dpi_scale = 1.0
+    dpi_ratio = max(1.0, dpi_scale / 1.25)
+    resolution_ratio = max(
+        1.0,
+        min(root.winfo_screenwidth() / 2560, root.winfo_screenheight() / 1440),
+    )
+    return min(1.8, dpi_ratio, resolution_ratio)
+
+
+def scaled_window_size(root: tk.Tk, page: str = "large", max_screen_ratio: float = 0.9) -> tuple[int, int]:
+    scale = detect_layout_scale(root)
+    base_w, base_h = PAGE_SIZES[page]
+    width = min(round(base_w * scale), round(root.winfo_screenwidth() * max_screen_ratio))
+    height = min(round(base_h * scale), round(root.winfo_screenheight() * max_screen_ratio))
+    return width, height
+
+
 class EpubTtsApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.ui_scale = float(getattr(root, "_epub_tts_ui_scale", 1.0))
         self.root.title(f"EPUB 转 MP3 v{APP_VERSION}")
-        self.root.geometry(f"{self._px(840)}x{self._px(600)}")
-        self.root.minsize(self._px(780), self._px(520))
+        width, height = scaled_window_size(self.root, "medium")
+        self.root.geometry(f"{width}x{height}")
+        min_width, min_height = scaled_window_size(self.root, "small", 0.86)
+        self.root.minsize(min_width, min_height)
 
         self.message_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.epub_path: Path | None = None
@@ -243,9 +271,10 @@ class EpubTtsApp:
         self.pitch_var = StringVar(value=DEFAULT_PITCH)
         self.volume_var = StringVar(value=DEFAULT_VOLUME)
         self.output_var = StringVar()
-        self.merge_var = BooleanVar(value=True)
+        self.merge_var = BooleanVar(value=False)
         self.overwrite_var = BooleanVar(value=False)
-        self.status_var = StringVar(value="拖入 EPUB 文件，或点击“选择 EPUB”。")
+        self.status_var = StringVar(value="")
+        self.selection_var = StringVar(value="")
         self.progress_var = tk.DoubleVar(value=0)
 
         self._configure_style()
@@ -259,28 +288,96 @@ class EpubTtsApp:
     def _pad(self, *values: int) -> tuple[int, ...]:
         return tuple(self._px(value) for value in values)
 
+    def _add_section_title(self, parent: tk.Frame, text: str, bg: str) -> None:
+        tk.Label(
+            parent,
+            text=f" {text} ",
+            bg=bg,
+            fg=self.colors["text"],
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).place(x=self._px(18), y=0)
+
+    def _build_check_row(self, parent: tk.Misc, text: str, variable: BooleanVar, bg: str) -> tk.Canvas:
+        height = self._px(24)
+        box = self._px(12)
+        canvas = tk.Canvas(parent, height=height, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+
+        def draw() -> None:
+            width = max(canvas.winfo_width(), self._px(220))
+            center_y = height // 2
+            left = self._px(2)
+            canvas.delete("all")
+            canvas.create_rectangle(
+                left,
+                center_y - box // 2,
+                left + box,
+                center_y + box // 2,
+                fill=self.colors["field"],
+                outline=self.colors["border"],
+            )
+            if variable.get():
+                canvas.create_line(
+                    left + self._px(3),
+                    center_y,
+                    left + self._px(5),
+                    center_y + self._px(3),
+                    left + box - self._px(2),
+                    center_y - self._px(4),
+                    fill=self.colors["accent_dark"],
+                    width=max(1, self._px(2)),
+                    capstyle=tk.ROUND,
+                    joinstyle=tk.ROUND,
+                )
+            canvas.create_text(
+                left + box + self._px(8),
+                center_y,
+                text=text,
+                fill=self.colors["text"],
+                font=("Microsoft YaHei UI", 9),
+                anchor="w",
+                width=width - left - box - self._px(10),
+            )
+
+        def toggle(event: tk.Event | None = None) -> None:
+            variable.set(not variable.get())
+            draw()
+
+        canvas.bind("<Configure>", lambda event: draw())
+        canvas.bind("<ButtonRelease-1>", toggle)
+        return canvas
+
     def _configure_style(self) -> None:
         self.colors = {
-            "bg": "#f4f6fb",
-            "panel": "#ffffff",
-            "panel_soft": "#eef3fb",
-            "text_section": "#eef6ff",
-            "voice_section": "#eefaf2",
-            "list_section": "#fbf8ff",
-            "drop": "#dbeafe",
-            "drop_border": "#93c5fd",
-            "border": "#d8e0ec",
-            "text": "#182230",
-            "muted": "#64748b",
-            "accent": "#2563eb",
-            "accent_dark": "#1d4ed8",
-            "success": "#16825d",
-            "row_alt": "#f8fafc",
-            "row_selected": "#e8f1ff",
+            "bg": "#eef6ff",
+            "panel": "#f8fbff",
+            "panel_soft": "#eaf4ff",
+            "text_section": "#e7f3ff",
+            "voice_section": "#edf7ff",
+            "list_section": "#f4f9ff",
+            "drop": "#d9ecff",
+            "drop_border": "#9ccaf2",
+            "border": "#bfd6ee",
+            "field": "#fbfdff",
+            "text": "#183452",
+            "muted": "#5f7894",
+            "accent": "#6da9e8",
+            "accent_dark": "#3f82c8",
+            "accent_disabled": "#bfd8f3",
+            "success": "#8abde9",
+            "file": "#d9ecff",
+            "file_active": "#c5e1fb",
+            "file_fg": "#1e578f",
+            "select": "#e3f1ff",
+            "select_active": "#cfe7ff",
+            "select_fg": "#234f7d",
+            "tree_heading": "#e8f2fd",
+            "progress_track": "#dce8f5",
+            "row_alt": "#f0f7ff",
+            "row_selected": "#d8ecff",
         }
         self.root.configure(bg=self.colors["bg"])
         self.default_font = tkfont.nametofont("TkDefaultFont")
-        self.default_font.configure(family="Microsoft YaHei UI", size=10)
+        self.default_font.configure(family="Microsoft YaHei UI", size=9)
         style = ttk.Style(self.root)
         try:
             style.theme_use("clam")
@@ -292,142 +389,151 @@ class EpubTtsApp:
         style.configure("List.TFrame", background=self.colors["list_section"], relief="flat")
         style.configure("Soft.TFrame", background=self.colors["panel_soft"])
         style.configure("Muted.TLabel", background=self.colors["panel"], foreground=self.colors["muted"])
-        style.configure("Section.TLabel", background=self.colors["panel"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 11, "bold"))
-        style.configure("ListSection.TLabel", background=self.colors["list_section"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 11, "bold"))
+        style.configure("Section.TLabel", background=self.colors["panel"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("ListSection.TLabel", background=self.colors["list_section"], foreground=self.colors["text"], font=("Microsoft YaHei UI", 10, "bold"))
         style.configure("ListMuted.TLabel", background=self.colors["list_section"], foreground=self.colors["muted"])
         style.configure("TLabel", background=self.colors["bg"], foreground=self.colors["text"])
         style.configure("TCheckbutton", background=self.colors["panel"], foreground=self.colors["text"])
-        style.configure("TEntry", padding=self._pad(7, 5), fieldbackground="#ffffff", bordercolor=self.colors["border"], lightcolor=self.colors["border"], darkcolor=self.colors["border"])
-        style.configure("TCombobox", padding=self._pad(7, 5), fieldbackground="#ffffff", bordercolor=self.colors["border"], arrowcolor=self.colors["muted"])
-        style.configure("TButton", padding=self._pad(10, 8), background="#ffffff", foreground=self.colors["text"], bordercolor=self.colors["border"])
-        style.map("TButton", background=[("active", "#eef3fb")])
-        style.configure("Accent.TButton", padding=self._pad(10, 8), background=self.colors["accent"], foreground="#ffffff", bordercolor=self.colors["accent"])
-        style.map("Accent.TButton", background=[("active", self.colors["accent_dark"]), ("disabled", "#9bb7ef")], foreground=[("disabled", "#edf2ff")])
-        style.configure("Ghost.TButton", padding=self._pad(10, 8), background=self.colors["panel"], foreground=self.colors["text"], bordercolor=self.colors["border"])
-        style.configure("File.TButton", padding=self._pad(10, 8), background="#dbeafe", foreground="#1e3a8a", bordercolor="#93c5fd")
-        style.map("File.TButton", background=[("active", "#bfdbfe"), ("disabled", "#dbeafe")])
-        style.configure("Select.TButton", padding=self._pad(10, 8), background="#dcfce7", foreground="#14532d", bordercolor="#86efac")
-        style.map("Select.TButton", background=[("active", "#bbf7d0"), ("disabled", "#dcfce7")])
-        style.configure("Export.TButton", padding=self._pad(10, 8), background="#2563eb", foreground="#ffffff", bordercolor="#1d4ed8")
-        style.map("Export.TButton", background=[("active", "#1d4ed8"), ("disabled", "#9bb7ef")], foreground=[("disabled", "#edf2ff")])
-        style.configure("Step.TButton", padding=self._pad(1, 0), background="#ffffff", foreground=self.colors["text"], bordercolor=self.colors["border"])
-        style.map("Step.TButton", background=[("active", "#eef3fb")])
-        style.configure("Horizontal.TProgressbar", background=self.colors["accent"], troughcolor="#e3e9f3", bordercolor="#e3e9f3", lightcolor=self.colors["accent"], darkcolor=self.colors["accent"])
-        style.configure("Treeview", background="#ffffff", fieldbackground="#ffffff", foreground=self.colors["text"], rowheight=self._px(28), bordercolor=self.colors["border"])
-        style.configure("Treeview.Heading", background="#eef3fb", foreground="#334155", padding=self._pad(7, 6), font=("Microsoft YaHei UI", 10, "bold"))
-        style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", self.colors["text"])])
+        style.configure("TEntry", padding=self._pad(6, 4), fieldbackground=self.colors["field"], bordercolor=self.colors["border"], lightcolor=self.colors["border"], darkcolor=self.colors["border"])
+        style.configure("TCombobox", padding=self._pad(6, 4), fieldbackground=self.colors["field"], bordercolor=self.colors["border"], arrowcolor=self.colors["muted"])
+        style.configure("TButton", padding=self._pad(9, 6), background=self.colors["panel"], foreground=self.colors["text"], bordercolor=self.colors["border"])
+        style.map("TButton", background=[("active", self.colors["panel_soft"])])
+        style.configure("Accent.TButton", padding=self._pad(9, 6), background=self.colors["accent"], foreground="#ffffff", bordercolor=self.colors["accent"])
+        style.map("Accent.TButton", background=[("active", self.colors["accent_dark"]), ("disabled", self.colors["accent_disabled"])], foreground=[("disabled", self.colors["field"])])
+        style.configure("Ghost.TButton", padding=self._pad(9, 6), background=self.colors["panel"], foreground=self.colors["text"], bordercolor=self.colors["border"])
+        style.configure("File.TButton", padding=self._pad(9, 6), background=self.colors["file"], foreground=self.colors["file_fg"], bordercolor=self.colors["drop_border"])
+        style.map("File.TButton", background=[("active", self.colors["file_active"]), ("disabled", self.colors["file"])])
+        style.configure("Select.TButton", padding=self._pad(9, 6), background=self.colors["select"], foreground=self.colors["select_fg"], bordercolor=self.colors["success"])
+        style.map("Select.TButton", background=[("active", self.colors["select_active"]), ("disabled", self.colors["select"])])
+        style.configure("Export.TButton", padding=self._pad(9, 6), background=self.colors["accent"], foreground="#ffffff", bordercolor=self.colors["accent_dark"])
+        style.map("Export.TButton", background=[("active", self.colors["accent_dark"]), ("disabled", self.colors["accent_disabled"])], foreground=[("disabled", self.colors["field"])])
+        style.configure("Step.TButton", padding=self._pad(1, 0), background=self.colors["field"], foreground=self.colors["text"], bordercolor=self.colors["border"])
+        style.map("Step.TButton", background=[("active", self.colors["panel_soft"])])
+        style.configure("Horizontal.TProgressbar", background=self.colors["accent"], troughcolor=self.colors["progress_track"], bordercolor=self.colors["progress_track"], lightcolor=self.colors["accent"], darkcolor=self.colors["accent"])
+        style.configure("Treeview", background=self.colors["field"], fieldbackground=self.colors["field"], foreground=self.colors["text"], rowheight=self._px(24), bordercolor=self.colors["border"])
+        style.configure("Treeview.Heading", background=self.colors["tree_heading"], foreground=self.colors["text"], padding=self._pad(6, 4), font=("Microsoft YaHei UI", 9, "bold"))
+        style.map("Treeview", background=[("selected", self.colors["row_selected"])], foreground=[("selected", self.colors["text"])])
 
     def _build_ui(self) -> None:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
 
-        toolbar = ttk.Frame(self.root, style="Panel.TFrame", padding=(12, 8, 12, 8))
+        toolbar = ttk.Frame(self.root, style="Panel.TFrame", padding=self._pad(12, 8, 12, 8))
         toolbar.grid(row=0, column=0, sticky="ew")
-        toolbar.columnconfigure(8, weight=1)
-        button_w = self._px(116)
-        button_h = self._px(38)
-        radius = self._px(10)
-        RoundedButton(toolbar, "选择 EPUB", self.choose_epub, button_w, button_h, radius, self.colors["panel"], "#dbeafe", "#bfdbfe", "#dbeafe", "#1e3a8a").grid(row=0, column=0, sticky="w")
-        RoundedButton(toolbar, "选择输出目录", self.choose_output, button_w, button_h, radius, self.colors["panel"], "#dbeafe", "#bfdbfe", "#dbeafe", "#1e3a8a").grid(row=0, column=1, sticky="w", padx=(8, 0))
-        RoundedButton(toolbar, "全选", self.select_all, button_w, button_h, radius, self.colors["panel"], "#dcfce7", "#bbf7d0", "#dcfce7", "#14532d").grid(row=0, column=2, sticky="w", padx=(18, 0))
-        RoundedButton(toolbar, "全不选", self.select_none, button_w, button_h, radius, self.colors["panel"], "#dcfce7", "#bbf7d0", "#dcfce7", "#14532d").grid(row=0, column=3, sticky="w", padx=(8, 0))
-        RoundedButton(toolbar, "正文推荐", self.select_body_guess, button_w, button_h, radius, self.colors["panel"], "#dcfce7", "#bbf7d0", "#dcfce7", "#14532d").grid(row=0, column=4, sticky="w", padx=(8, 0))
-        self.export_button = RoundedButton(toolbar, "导出 MP3", self.export_mp3, button_w, button_h, radius, self.colors["panel"], "#2563eb", "#1d4ed8", "#9bb7ef", "#ffffff")
-        self.export_button.grid(row=0, column=5, sticky="w", padx=(18, 0))
+        toolbar.columnconfigure(6, weight=1)
+        button_w = self._px(106)
+        button_h = self._px(34)
+        radius = self._px(9)
+        RoundedButton(toolbar, "选择 EPUB", self.choose_epub, button_w, button_h, radius, self.colors["panel"], self.colors["file"], self.colors["file_active"], self.colors["file"], self.colors["file_fg"]).grid(row=0, column=0, sticky="w")
+        RoundedButton(toolbar, "选择输出目录", self.choose_output, button_w, button_h, radius, self.colors["panel"], self.colors["file"], self.colors["file_active"], self.colors["file"], self.colors["file_fg"]).grid(row=0, column=1, sticky="w", padx=self._pad(8, 0))
+        RoundedButton(toolbar, "全选", self.select_all, button_w, button_h, radius, self.colors["panel"], self.colors["select"], self.colors["select_active"], self.colors["select"], self.colors["select_fg"]).grid(row=0, column=2, sticky="w", padx=self._pad(22, 0))
+        RoundedButton(toolbar, "全不选", self.select_none, button_w, button_h, radius, self.colors["panel"], self.colors["select"], self.colors["select_active"], self.colors["select"], self.colors["select_fg"]).grid(row=0, column=3, sticky="w", padx=self._pad(8, 0))
+        RoundedButton(toolbar, "正文推荐", self.select_body_guess, button_w, button_h, radius, self.colors["panel"], self.colors["select"], self.colors["select_active"], self.colors["select"], self.colors["select_fg"]).grid(row=0, column=4, sticky="w", padx=self._pad(8, 0))
+        self.export_button = RoundedButton(toolbar, "导出 MP3", self.export_mp3, button_w, button_h, radius, self.colors["panel"], self.colors["accent"], self.colors["accent_dark"], self.colors["accent_disabled"], "#ffffff")
+        self.export_button.grid(row=0, column=7, sticky="e", padx=self._pad(22, 0))
 
-        content = ttk.Frame(self.root, style="App.TFrame", padding=(8, 8, 8, 8))
+        content = ttk.Frame(self.root, style="App.TFrame", padding=self._pad(8, 8, 8, 7))
         content.grid(row=1, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=0, minsize=self._px(280))
+        content.columnconfigure(0, weight=0, minsize=self._px(300))
         content.columnconfigure(1, weight=1)
         content.rowconfigure(0, weight=1)
 
         left = ttk.Frame(content, style="App.TFrame")
-        left.configure(width=self._px(280))
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        left.configure(width=self._px(300))
+        left.grid(row=0, column=0, sticky="nsew", padx=self._pad(0, 8))
         left.grid_propagate(False)
         left.columnconfigure(0, weight=1)
-        left.rowconfigure(0, weight=1, uniform="left_sections")
-        left.rowconfigure(1, weight=1, uniform="left_sections")
+        left.rowconfigure(0, weight=0)
+        left.rowconfigure(1, weight=1)
 
         text_section = tk.Frame(left, bg=self.colors["text_section"], highlightbackground=self.colors["border"], highlightthickness=1)
-        text_section.grid(row=0, column=0, sticky="nsew")
+        text_section.grid(row=0, column=0, sticky="ew")
         text_section.columnconfigure(0, weight=1)
-        tk.Label(text_section, text="文本选择", bg=self.colors["text_section"], fg=self.colors["text"], font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
-        drop_panel = tk.Canvas(text_section, bg=self.colors["text_section"], highlightthickness=0, height=self._px(136))
-        drop_panel.grid(row=1, column=0, sticky="ew", padx=10, pady=(8, 0))
+        self._add_section_title(text_section, "文本选择", self.colors["text_section"])
+        drop_panel = tk.Canvas(text_section, bg=self.colors["text_section"], highlightthickness=0, height=self._px(78))
+        drop_panel.grid(row=0, column=0, sticky="ew", padx=self._px(10), pady=self._pad(22, 0))
         drop_panel.columnconfigure(0, weight=1)
         self.drop_label = drop_panel
         self.drop_label.bind("<Configure>", self._draw_drop_area)
 
         file_row = tk.Frame(text_section, bg=self.colors["text_section"])
-        file_row.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 0))
+        file_row.grid(row=1, column=0, sticky="ew", padx=self._px(10), pady=self._pad(7, 0))
         file_row.columnconfigure(0, weight=1)
         self.file_label = tk.Label(file_row, text="未选择文件", bg=self.colors["text_section"], fg=self.colors["muted"], anchor="w")
         self.file_label.grid(row=0, column=0, sticky="ew")
 
         output_row = tk.Frame(text_section, bg=self.colors["text_section"])
-        output_row.grid(row=3, column=0, sticky="ew", padx=10, pady=(10, 10))
+        output_row.grid(row=2, column=0, sticky="ew", padx=self._px(10), pady=self._pad(8, 10))
         output_row.columnconfigure(0, weight=1)
         tk.Label(output_row, text="输出目录", bg=self.colors["text_section"], fg=self.colors["text"], anchor="w").grid(row=0, column=0, sticky="w")
         ttk.Entry(output_row, textvariable=self.output_var).grid(row=1, column=0, sticky="ew", pady=(4, 0))
 
         voice_section = tk.Frame(left, bg=self.colors["voice_section"], highlightbackground=self.colors["border"], highlightthickness=1)
-        voice_section.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        voice_section.grid(row=1, column=0, sticky="nsew", pady=self._pad(8, 0))
         voice_section.columnconfigure(0, weight=1)
-        tk.Label(voice_section, text="音色选择", bg=self.colors["voice_section"], fg=self.colors["text"], font=("Microsoft YaHei UI", 11, "bold"), anchor="w").grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
-        tk.Label(voice_section, text="音色", bg=self.colors["voice_section"], fg=self.colors["text"], anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=(8, 0))
+        self._add_section_title(voice_section, "音色选择", self.colors["voice_section"])
         voice_box = ttk.Combobox(voice_section, textvariable=self.voice_var, values=[f"{name} | {value}" for name, value in VOICE_OPTIONS], state="readonly", width=1)
-        voice_box.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 0))
+        voice_box.grid(row=0, column=0, sticky="ew", padx=self._px(10), pady=self._pad(24, 0))
         voice_box.current(0)
         voice_box.bind("<<ComboboxSelected>>", self._voice_selected)
 
         params = tk.Frame(voice_section, bg=self.colors["voice_section"])
-        params.grid(row=3, column=0, sticky="ew", padx=10, pady=(10, 0))
-        for col in (0, 1, 2):
-            params.columnconfigure(col, weight=1)
-        tk.Label(params, text="语速", bg=self.colors["voice_section"], fg=self.colors["text"], anchor="w").grid(row=0, column=0, sticky="w")
-        tk.Label(params, text="音调", bg=self.colors["voice_section"], fg=self.colors["text"], anchor="w").grid(row=0, column=1, sticky="w", padx=(10, 0))
-        tk.Label(params, text="音量", bg=self.colors["voice_section"], fg=self.colors["text"], anchor="w").grid(row=0, column=2, sticky="w", padx=(10, 0))
-        self._build_stepper(params, self.rate_var, "%", 5).grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self._build_stepper(params, self.pitch_var, "Hz", 5).grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=(4, 0))
-        self._build_stepper(params, self.volume_var, "%", 5).grid(row=1, column=2, sticky="ew", padx=(10, 0), pady=(4, 0))
+        params.grid(row=1, column=0, sticky="ew", padx=self._px(10), pady=self._pad(10, 0))
+        params.columnconfigure(1, weight=1)
+        for row, (label, variable, unit) in enumerate(
+            (
+                ("语速", self.rate_var, "%"),
+                ("音调", self.pitch_var, "Hz"),
+                ("音量", self.volume_var, "%"),
+            )
+        ):
+            tk.Label(params, text=label, bg=self.colors["voice_section"], fg=self.colors["text"], anchor="w").grid(
+                row=row,
+                column=0,
+                sticky="w",
+                pady=self._pad(0 if row == 0 else 6, 0),
+            )
+            self._build_stepper(params, variable, unit, 5).grid(
+                row=row,
+                column=1,
+                sticky="ew",
+                padx=self._pad(10, 0),
+                pady=self._pad(0 if row == 0 else 6, 0),
+            )
 
         options = tk.Frame(voice_section, bg=self.colors["voice_section"])
-        options.grid(row=4, column=0, sticky="ew", padx=10, pady=(12, 10))
-        tk.Checkbutton(options, text="合并整本 MP3", variable=self.merge_var, bg=self.colors["voice_section"], fg=self.colors["text"], activebackground=self.colors["voice_section"], selectcolor="#ffffff", anchor="w").pack(anchor="w")
-        tk.Checkbutton(options, text="覆盖已有章节 MP3", variable=self.overwrite_var, bg=self.colors["voice_section"], fg=self.colors["text"], activebackground=self.colors["voice_section"], selectcolor="#ffffff", anchor="w").pack(anchor="w", pady=(6, 0))
+        options.grid(row=2, column=0, sticky="ew", padx=self._px(10), pady=self._pad(10, 10))
+        self._build_check_row(options, "合并整本 MP3", self.merge_var, self.colors["voice_section"]).pack(fill=tk.X)
+        self._build_check_row(options, "覆盖已有章节 MP3", self.overwrite_var, self.colors["voice_section"]).pack(fill=tk.X, pady=self._pad(4, 0))
 
-        table_frame = ttk.Frame(content, style="List.TFrame", padding=(14, 12, 14, 12))
+        table_frame = tk.Frame(content, bg=self.colors["list_section"], highlightbackground=self.colors["border"], highlightthickness=1)
         table_frame.grid(row=0, column=1, sticky="nsew")
         table_frame.columnconfigure(0, weight=1)
-        table_frame.rowconfigure(1, weight=1)
-
-        table_header = ttk.Frame(table_frame, style="List.TFrame")
-        table_header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        table_header.columnconfigure(0, weight=1)
-        ttk.Label(table_header, text="章节选择", style="ListSection.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(table_header, text="点击章节行即可勾选或取消", style="ListMuted.TLabel").grid(row=0, column=1, sticky="e")
+        table_frame.rowconfigure(0, weight=1)
+        table_frame.rowconfigure(1, weight=0)
+        self._add_section_title(table_frame, "章节选择", self.colors["list_section"])
 
         columns = ("use", "index", "title")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
         self.tree.heading("use", text="选")
         self.tree.heading("index", text="#")
         self.tree.heading("title", text="章节")
-        self.tree.column("use", width=self._px(64), minwidth=self._px(64), anchor="center", stretch=False)
-        self.tree.column("index", width=self._px(72), minwidth=self._px(72), anchor="center", stretch=False)
-        self.tree.column("title", width=760, minwidth=360, anchor="w", stretch=True)
-        self.tree.grid(row=1, column=0, sticky="nsew")
+        self.tree.column("use", width=self._px(48), minwidth=self._px(48), anchor="center", stretch=False)
+        self.tree.column("index", width=self._px(48), minwidth=self._px(48), anchor="center", stretch=False)
+        self.tree.column("title", width=self._px(300), minwidth=self._px(160), anchor="w", stretch=False)
+        self.tree.grid(row=0, column=0, sticky="nsew", padx=self._px(7), pady=self._pad(24, 0))
         self.tree.bind("<ButtonRelease-1>", self._tree_clicked)
         self.tree.bind("<space>", self._toggle_selected_event)
         self.tree.bind("<MouseWheel>", self._on_tree_mousewheel)
         self.tree.bind("<Button-4>", self._on_tree_mousewheel)
         self.tree.bind("<Button-5>", self._on_tree_mousewheel)
+        self.tree.bind("<Configure>", self._resize_tree_columns)
         self.tree.tag_configure("checked", background=self.colors["row_selected"])
         self.tree.tag_configure("odd", background=self.colors["row_alt"])
-        self.tree.tag_configure("even", background="#ffffff")
+        self.tree.tag_configure("even", background=self.colors["field"])
 
-        self.progress_canvas = tk.Canvas(table_frame, height=self._px(34), bg=self.colors["list_section"], highlightthickness=0, bd=0)
-        self.progress_canvas.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        self.progress_canvas = tk.Canvas(table_frame, height=self._px(26), bg=self.colors["list_section"], highlightthickness=0, bd=0)
+        self.progress_canvas.grid(row=1, column=0, sticky="ew", padx=self._px(7), pady=self._pad(8, 7))
         self.progress_canvas.bind("<Configure>", self._draw_progress_bar)
         self._draw_progress_bar()
 
@@ -438,12 +544,25 @@ class EpubTtsApp:
             widget.drop_target_register(DND_FILES)
             widget.dnd_bind("<<Drop>>", self._drop_file)
 
+    def _resize_tree_columns(self, event: tk.Event | None = None) -> None:
+        tree = getattr(self, "tree", None)
+        if not isinstance(tree, ttk.Treeview):
+            return
+        total = max(tree.winfo_width(), self._px(260))
+        use_width = self._px(48)
+        index_width = self._px(48)
+        gap = self._px(3)
+        title_width = max(self._px(160), total - use_width - index_width - gap)
+        tree.column("use", width=use_width, minwidth=use_width, stretch=False)
+        tree.column("index", width=index_width, minwidth=index_width, stretch=False)
+        tree.column("title", width=title_width, minwidth=self._px(160), stretch=False)
+
     def _draw_drop_area(self, event: tk.Event | None = None) -> None:
         canvas = self.drop_label
         if not isinstance(canvas, tk.Canvas):
             return
         width = max(canvas.winfo_width(), self._px(240))
-        height = max(canvas.winfo_height(), self._px(120))
+        height = max(canvas.winfo_height(), self._px(70))
         canvas.delete("all")
         draw_rounded_rect(
             canvas,
@@ -451,16 +570,16 @@ class EpubTtsApp:
             self._px(1),
             width - self._px(1),
             height - self._px(1),
-            self._px(14),
+            self._px(12),
             fill=self.colors["drop"],
             outline=self.colors["drop_border"],
         )
         canvas.create_text(
             width // 2,
             height // 2,
-            text=".epub 拖到这里",
+            text="EPUB",
             fill=self.colors["accent_dark"],
-            font=("Microsoft YaHei UI", 10, "bold"),
+            font=("Microsoft YaHei UI", 9, "bold"),
         )
 
     def _draw_progress_bar(self, event: tk.Event | None = None) -> None:
@@ -468,7 +587,7 @@ class EpubTtsApp:
         if not isinstance(canvas, tk.Canvas):
             return
         width = max(canvas.winfo_width(), self._px(240))
-        height = max(canvas.winfo_height(), self._px(34))
+        height = max(canvas.winfo_height(), self._px(28))
         value = max(0.0, min(100.0, float(self.progress_var.get())))
         left = self._px(12)
         right = width - self._px(12)
@@ -485,7 +604,7 @@ class EpubTtsApp:
             right,
             center_y + track_h // 2,
             radius,
-            fill="#e2e8f0",
+            fill=self.colors["progress_track"],
             outline="",
         )
         if value > 0:
@@ -499,12 +618,13 @@ class EpubTtsApp:
                 fill=self.colors["accent"],
                 outline="",
             )
+        icon_x = min(max(fill_x, left + self._px(10)), right - self._px(10))
         canvas.create_text(
-            fill_x,
+            icon_x,
             center_y,
             text="🎧",
             fill=self.colors["accent_dark"],
-            font=("Segoe UI Emoji", max(12, self._px(11))),
+            font=("Segoe UI Emoji", -max(9, min(self._px(14), height - self._px(8)))),
         )
 
     def _build_stepper(self, parent: tk.Misc, variable: StringVar, unit: str, step: int) -> ttk.Frame:
@@ -515,8 +635,8 @@ class EpubTtsApp:
             frame,
             up_command=lambda: self._adjust_value(variable, unit, step),
             down_command=lambda: self._adjust_value(variable, unit, -step),
-            width=self._px(16),
-            height=self._px(34),
+            width=self._px(15),
+            height=self._px(30),
             bg=self.colors["voice_section"],
             border=self.colors["border"],
             fg=self.colors["text"],
@@ -800,6 +920,7 @@ class EpubTtsApp:
                 self.file_label.configure(text=str(path))
                 self.checked = self._body_guess_indices()
                 self._render_chapters()
+                self.selection_var.set(f"已选择 {len(self.checked)} / {len(self.chapters)} 个章节")
                 self.status_var.set(f"已读取：{title}，共 {len(chapters)} 个章节。")
             elif kind == "error":
                 self.worker_failed = True
@@ -814,6 +935,7 @@ class EpubTtsApp:
         self.root.after(100, self._poll_messages)
 
     def _update_selected_status(self) -> None:
+        self.selection_var.set(f"已选择 {len(self.checked)} / {len(self.chapters)} 个章节")
         self.status_var.set(f"已选择 {len(self.checked)} / {len(self.chapters)} 个章节。")
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "epub-tts"
-version = "1.1"
+version = "1.2"
 description = "Convert EPUB books to MP3 files with a chosen TTS voice."
 requires-python = ">=3.10,<3.14"
 dependencies = [

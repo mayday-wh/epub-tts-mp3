@@ -1,4 +1,4 @@
-# EPUB to MP3 TTS v1.1
+# EPUB to MP3 TTS v1.2
 
 把当前文件夹里的 EPUB 转成章节 MP3，也可以合并成整本 MP3。默认使用 Microsoft Edge 的中文自然语音：
 
@@ -65,4 +65,4 @@ uv run --managed-python epub_tts_ui.py
 - 自动读取章节列表
 - 勾选需要转换的章节
 - 选择中文 TTS 音色、语速、音调、音量
-- 生成章节 MP3，并可合并为整本 MP3
+- 默认生成章节 MP3，按需勾选合并为整本 MP3
